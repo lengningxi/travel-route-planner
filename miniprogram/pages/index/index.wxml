@@ -1,0 +1,75 @@
+<view class="container">
+  <map id="map" class="map" latitude="{{latitude}}" longitude="{{longitude}}" zoom="{{zoom}}"
+    markers="{{markers}}" polyline="{{polyline}}" show-location bindmarkertap="onMarkerTap"
+    bindregionchange="onRegionChange"></map>
+
+  <view class="bottom-panel {{panelExpanded ? 'expanded' : ''}}">
+    <view class="panel-handle" bindtap="togglePanel">
+      <view class="handle-bar"></view>
+    </view>
+
+    <view class="panel-header">
+      <view class="city-search-wrap">
+        <input class="city-search-input" placeholder="搜索城市" value="{{searchText}}"
+          bindinput="onSearchInput" bindconfirm="onSearchConfirm" />
+      </view>
+      <view class="settings-btn" bindtap="showSettings">
+        <text class="iconfont">⚙</text>
+      </view>
+    </view>
+
+    <view class="hot-cities" wx:if="{{!searchText}}">
+      <view class="hot-city-btn {{currentCity === item ? 'active' : ''}}" wx:for="{{hotCities}}"
+        wx:key="*this" bindtap="selectCity" data-city="{{item}}">{{item}}</view>
+    </view>
+
+    <view class="city-dropdown" wx:if="{{searchText && filteredCities.length > 0}}">
+      <view class="city-dropdown-item" wx:for="{{filteredCities}}" wx:key="*this"
+        bindtap="selectCity" data-city="{{item}}">{{item}}</view>
+    </view>
+
+    <view class="current-city-tag" wx:if="{{currentCity}}">
+      <text>当前城市：{{currentCity}}</text>
+    </view>
+
+    <view class="attractions-section" wx:if="{{currentCity}}">
+      <view class="section-title">
+        <text>景点列表 ({{attractions.length}})</text>
+        <view class="route-btn" bindtap="optimizeRoute" wx:if="{{selectedCount > 1}}">
+          优化路线 ({{selectedCount}}个)
+        </view>
+      </view>
+      <scroll-view class="attractions-list" scroll-y>
+        <view class="attraction-item {{item.selected ? 'selected' : ''}}"
+          wx:for="{{attractions}}" wx:key="name" bindtap="toggleAttraction" data-index="{{index}}">
+          <view class="attraction-check">
+            <view class="checkbox {{item.selected ? 'checked' : ''}}"></view>
+          </view>
+          <view class="attraction-info">
+            <text class="attraction-name">{{item.name}}</text>
+            <text class="attraction-rating" wx:if="{{item.rating}}">★ {{item.rating}}</text>
+          </view>
+        </view>
+      </scroll-view>
+    </view>
+
+    <view class="route-info" wx:if="{{routeInfo}}">
+      <text>{{routeInfo}}</text>
+    </view>
+  </view>
+
+  <view class="settings-mask" wx:if="{{showSettingsDialog}}" bindtap="hideSettings"></view>
+  <view class="settings-dialog" wx:if="{{showSettingsDialog}}">
+    <view class="dialog-title">设置</view>
+    <view class="dialog-field">
+      <text class="field-label">高德Web服务API Key</text>
+      <input class="field-input" placeholder="请输入Web服务类型的Key"
+        value="{{amapWebKey}}" bindinput="onKeyInput" />
+      <text class="field-hint">需在高德开放平台申请"Web服务"类型的Key</text>
+    </view>
+    <view class="dialog-buttons">
+      <view class="dialog-btn cancel" bindtap="hideSettings">取消</view>
+      <view class="dialog-btn confirm" bindtap="saveSettings">保存</view>
+    </view>
+  </view>
+</view>

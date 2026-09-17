@@ -1,0 +1,18 @@
+{
+  "pages": [
+    "pages/index/index"
+  ],
+  "window": {
+    "navigationBarTitleText": "旅游路线规划",
+    "navigationBarBackgroundColor": "#2563eb",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#f5f5f5"
+  },
+  "permission": {
+    "scope.userLocation": {
+      "desc": "用于在地图上显示您的位置"
+    }
+  },
+  "requiredPrivateInfos": ["getLocation"],
+  "sitemapLocation": "sitemap.json"
+}
