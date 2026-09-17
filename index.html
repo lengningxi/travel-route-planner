@@ -57,7 +57,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC"
 .sidebar-scroll { flex: 1; overflow-y: auto; }
 
 /* Route Panel */
-.route-panel { padding: 16px 20px; border-top: 1px solid #f0f0f0; background: #fafbfc; max-height: 240px; overflow-y: auto; }
+.route-panel { padding: 16px 20px; border-top: 1px solid #f0f0f0; background: #fafbfc; max-height: 360px; overflow-y: auto; }
 .route-panel h3 { font-size: 13px; color: #888; margin-bottom: 10px; }
 .route-step { display: flex; align-items: flex-start; margin-bottom: 8px; font-size: 13px; }
 .route-step .step-num { width: 22px; height: 22px; border-radius: 50%; background: #667eea; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; flex-shrink: 0; margin-right: 10px; }
@@ -67,6 +67,27 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC"
 .route-step .step-travel { font-size: 11px; color: #667eea; margin-top: 2px; }
 .route-summary { margin-top: 10px; padding: 10px; background: #eef1ff; border-radius: 8px; font-size: 12px; color: #555; }
 .route-summary strong { color: #667eea; }
+
+/* Mode Tabs */
+.mode-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.mode-tab { flex: 1; padding: 7px 8px; border: 1px solid #e0e0e0; border-radius: 8px; background: #fff; cursor: pointer; font-size: 12px; text-align: center; transition: all 0.2s; white-space: nowrap; }
+.mode-tab:hover { border-color: #667eea; color: #667eea; }
+.mode-tab.active { background: #667eea; color: #fff; border-color: #667eea; }
+.mode-tab.disabled { opacity: 0.5; cursor: not-allowed; }
+.route-loading { text-align: center; padding: 20px; color: #999; font-size: 13px; }
+
+/* Transit Details */
+.transit-segment { padding: 6px 0 6px 32px; font-size: 12px; border-left: 2px solid #e0e0e0; margin-left: 10px; position: relative; }
+.transit-segment.walking { color: #999; border-left-color: #ddd; }
+.transit-segment.bus { color: #4caf50; border-left-color: #4caf50; }
+.transit-segment.metro { color: #2196f3; border-left-color: #2196f3; }
+.transit-segment .seg-icon { position: absolute; left: -11px; top: 6px; width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; background: #fff; border: 2px solid #e0e0e0; }
+.transit-segment.walking .seg-icon { border-color: #ddd; }
+.transit-segment.bus .seg-icon { border-color: #4caf50; background: #e8f5e9; }
+.transit-segment.metro .seg-icon { border-color: #2196f3; background: #e3f2fd; }
+.transit-line-badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 500; margin: 0 2px; }
+.transit-segment.bus .transit-line-badge { background: #e8f5e9; color: #2e7d32; }
+.transit-segment.metro .transit-line-badge { background: #e3f2fd; color: #1565c0; }
 
 /* Map */
 .map-container { flex: 1; position: relative; }
@@ -155,6 +176,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC"
 
   <div class="route-panel" id="routePanel" style="display:none;">
     <h3>📋 路线详情</h3>
+    <div class="mode-tabs" id="modeTabs">
+      <div class="mode-tab active" data-mode="driving" onclick="switchMode('driving')">🚗 驾车</div>
+      <div class="mode-tab" data-mode="walking" onclick="switchMode('walking')">🚶 步行</div>
+      <div class="mode-tab" data-mode="transit" onclick="switchMode('transit')">🚌 公交</div>
+    </div>
     <div id="routeContent"></div>
   </div>
 </div>
@@ -194,6 +220,9 @@ let routeMarkers = [];
 let routePolyline = null;
 let distanceLabelsArr = [];
 let infoLabels = [];
+let allRoutesData = {};
+let currentTravelMode = 'driving';
+let currentOrderedPoints = [];
 let amapApiKey = localStorage.getItem('amap_api_key') || '';
 let amapSecurityCode = localStorage.getItem('amap_security_code') || '';
 
@@ -326,6 +355,9 @@ function loadAmap() {
   script.src = `https://webapi.amap.com/maps?v=2.0&key=${amapApiKey}`;
   script.onload = () => {
     map = new AMap.Map('map', { zoom: 5, center: [104.5, 35.5], viewMode: '2D' });
+    AMap.plugin(['AMap.Driving', 'AMap.Walking', 'AMap.Transit'], () => {
+      console.log('路线规划插件已加载');
+    });
     if (currentCity) {
       const pts = ATTRACTIONS_DB[currentCity];
       if (pts.length) { map.setCenter([pts[0].lng, pts[0].lat]); map.setZoom(12); }
@@ -371,6 +403,8 @@ function clearRoute() {
   if (routePolyline) { routePolyline.setMap(null); routePolyline = null; }
   distanceLabelsArr.forEach(l => l.setMap && l.setMap(null));
   distanceLabelsArr = [];
+  allRoutesData = {};
+  currentOrderedPoints = [];
   document.getElementById('routePanel').style.display = 'none';
   updateMapMarkers();
 }
@@ -402,10 +436,119 @@ function haversineDistance(lng1, lat1, lng2, lat2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function estimateTravelTime(dist) {
-  if (dist < 5) return dist * 3;
-  if (dist < 30) return dist * 2;
-  return dist * 1.2;
+function searchDriving(origin, dest) {
+  return new Promise((resolve) => {
+    new AMap.Driving({}).search(origin, dest, (status, result) => {
+      if (status === 'complete' && result.routes && result.routes.length > 0) {
+        resolve(result.routes[0]);
+      } else resolve(null);
+    });
+  });
+}
+
+function searchWalking(origin, dest) {
+  return new Promise((resolve) => {
+    new AMap.Walking({}).search(origin, dest, (status, result) => {
+      if (status === 'complete' && result.routes && result.routes.length > 0) {
+        resolve(result.routes[0]);
+      } else resolve(null);
+    });
+  });
+}
+
+function searchTransit(origin, dest, city) {
+  return new Promise((resolve) => {
+    if (typeof AMap.Transit === 'function') {
+      new AMap.Transit({ city: city || '北京' }).search(origin, dest, (status, result) => {
+        if (status === 'complete' && result.routes && result.routes.length > 0) {
+          resolve(result.routes[0]);
+        } else resolve(null);
+      });
+    } else {
+      const oLng = origin.getLng ? origin.getLng() : origin.lng;
+      const oLat = origin.getLat ? origin.getLat() : origin.lat;
+      const dLng = dest.getLng ? dest.getLng() : dest.lng;
+      const dLat = dest.getLat ? dest.getLat() : dest.lat;
+      const url = `https://restapi.amap.com/v3/transit/integrated?origin=${oLng},${oLat}&destination=${dLng},${dLat}&city=${encodeURIComponent(city || '北京')}&key=${amapApiKey}&output=json`;
+      fetch(url).then(r => r.json()).then(data => {
+        if (data.status === '1' && data.route && data.route.transits && data.route.transits.length > 0) {
+          const transit = data.route.transits[0];
+          const steps = [];
+          let totalDist = 0;
+          let totalTime = parseInt(transit.duration) || 0;
+          (transit.segments || []).forEach(seg => {
+            if (seg.walking && seg.walking.steps && seg.walking.distance) {
+              const wDist = parseInt(seg.walking.distance) || 0;
+              if (wDist > 0) {
+                steps.push({ transit_mode: 'walking', distance: wDist, duration: Math.round(wDist / 1.2 * 60 / 1000) });
+                totalDist += wDist;
+              }
+            }
+            const bus = seg.bus || {};
+            const busLines = bus.bus_lines || [];
+            if (busLines.length > 0) {
+              const line = busLines[0];
+              const bType = (bus.bus_type || '').includes('地铁') ? 'subway' : 'bus';
+              const linePath = [];
+              if (line.path) {
+                line.path.split(';').forEach(pt => {
+                  const [lng, lat] = pt.split(',');
+                  if (lng && lat) linePath.push({ lng: parseFloat(lng), lat: parseFloat(lat) });
+                });
+              }
+              steps.push({
+                transit_mode: bType,
+                line_name: line.name || '',
+                departure_stop: (bus.on_station && bus.on_station.name) || '',
+                arrival_stop: (bus.off_station && bus.off_station.name) || '',
+                path: linePath,
+                distance: parseInt(bus.distance) || 0
+              });
+              totalDist += parseInt(bus.distance) || 0;
+            }
+          });
+          resolve({ steps, distance: totalDist, time: totalTime, _fromRest: true });
+        } else resolve(null);
+      }).catch(() => resolve(null));
+    }
+  });
+}
+
+function extractPolylinePath(route) {
+  const path = [];
+  if (!route || !route.steps) return path;
+  route.steps.forEach(step => {
+    if (step.path) step.path.forEach(p => path.push([p.lng, p.lat]));
+  });
+  return path;
+}
+
+async function fetchLegRoutes(origin, dest, city) {
+  const results = await Promise.allSettled([
+    searchDriving(origin, dest),
+    searchWalking(origin, dest),
+    searchTransit(origin, dest, city)
+  ]);
+  return {
+    driving: results[0].status === 'fulfilled' ? results[0].value : null,
+    walking: results[1].status === 'fulfilled' ? results[1].value : null,
+    transit: results[2].status === 'fulfilled' ? results[2].value : null
+  };
+}
+
+async function fetchAllRoutes(orderedPoints) {
+  const legs = [];
+  for (let i = 0; i < orderedPoints.length - 1; i++) {
+    const from = orderedPoints[i];
+    const to = orderedPoints[i + 1];
+    const legData = await fetchLegRoutes(
+      new AMap.LngLat(from.lng, from.lat),
+      new AMap.LngLat(to.lng, to.lat),
+      from.city || currentCity
+    );
+    legs.push(legData);
+  }
+  return legs;
 }
 
 function optimizeRoute(points) {
@@ -424,12 +567,12 @@ function optimizeRoute(points) {
     let bestIdx = 0, bestScore = Infinity;
     unvisited.forEach((p, i) => {
       const dist = haversineDistance(last.lng, last.lat, p.lng, p.lat);
-      const travel = estimateTravelTime(dist);
+      const travel = dist * 2;
       const hours = parseHours(p.hours);
       const arriveTime = 8 + (ordered.reduce((sum, op) => sum + op.duration, 0) + ordered.reduce((sum, op, idx) => {
         if (idx === 0) return 0;
         const prev = ordered[idx - 1];
-        return sum + estimateTravelTime(haversineDistance(prev.lng, prev.lat, op.lng, op.lat));
+        return sum + haversineDistance(prev.lng, prev.lat, op.lng, op.lat) * 2;
       }, 0)) / 60;
       const waitTime = Math.max(0, hours.open - arriveTime);
       const score = travel + waitTime * 2 + dist * 0.5;
@@ -440,34 +583,44 @@ function optimizeRoute(points) {
   return ordered;
 }
 
-function planRoute() {
+async function planRoute() {
   const points = getSelectedPoints();
   if (points.length < 2) { showToast('请至少选择2个景点'); return; }
 
   const optimized = optimizeRoute(points);
-  drawRoute(optimized);
-  showRouteDetails(optimized);
+  currentOrderedPoints = optimized;
+  currentTravelMode = 'driving';
+  allRoutesData = {};
+
+  const panel = document.getElementById('routePanel');
+  const content = document.getElementById('routeContent');
+  panel.style.display = 'block';
+  content.innerHTML = '<div class="route-loading">正在规划实际路线，请稍候...</div>';
+  document.getElementById('modeTabs').style.display = 'flex';
+
+  document.querySelectorAll('.mode-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.mode === 'driving');
+  });
+
+  drawRouteMarkers(optimized);
+
+  try {
+    const legs = await fetchAllRoutes(optimized);
+    allRoutesData = { legs, orderedPoints: optimized };
+    switchMode('driving');
+  } catch (e) {
+    content.innerHTML = '<div class="route-loading">路线规划失败，请重试</div>';
+    console.error('Route fetch error:', e);
+  }
 }
 
-function drawRoute(orderedPoints) {
-  if (!map) { showToast('请先配置高德地图 API'); return; }
-
+function drawRouteMarkers(orderedPoints) {
+  if (!map) return;
   if (routePolyline) { routePolyline.setMap(null); routePolyline = null; }
   distanceLabelsArr.forEach(l => l.setMap && l.setMap(null));
   distanceLabelsArr = [];
   routeMarkers.forEach(m => m.setMap(null));
   routeMarkers = [];
-
-  const path = orderedPoints.map(p => [p.lng, p.lat]);
-  routePolyline = new AMap.Polyline({
-    path,
-    strokeColor: '#667eea',
-    strokeWeight: 4,
-    strokeOpacity: 0.8,
-    lineJoin: 'round',
-    showDir: true
-  });
-  routePolyline.setMap(map);
 
   orderedPoints.forEach((p, i) => {
     const marker = new AMap.Marker({
@@ -486,33 +639,131 @@ function drawRoute(orderedPoints) {
     });
     marker.setMap(map);
     routeMarkers.push(marker);
-
-    if (i > 0) {
-      const prev = orderedPoints[i - 1];
-      const dist = haversineDistance(prev.lng, prev.lat, p.lng, p.lat);
-      const travel = estimateTravelTime(dist);
-      const midLng = (prev.lng + p.lng) / 2;
-      const midLat = (prev.lat + p.lat) / 2;
-      if (showDistanceLabels) {
-        const label = new AMap.Marker({
-          position: [midLng, midLat],
-          content: `<div class="distance-label">${dist < 1 ? (dist * 1000).toFixed(0) + 'm' : dist.toFixed(1) + 'km'} · ${travel < 60 ? travel.toFixed(0) + '分钟' : (travel / 60).toFixed(1) + '小时'}</div>`,
-          offset: new AMap.Pixel(-40, -10)
-        });
-        label.setMap(map);
-        distanceLabelsArr.push(label);
-      }
-    }
   });
 
   map.setFitView(routeMarkers, false, [60, 60, 60, 60]);
 }
 
-function showRouteDetails(orderedPoints) {
+function switchMode(mode) {
+  if (!allRoutesData.legs) return;
+  currentTravelMode = mode;
+  document.querySelectorAll('.mode-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.mode === mode);
+  });
+  if (mode === 'transit') {
+    const hasTransit = allRoutesData.legs.some(leg => leg.transit);
+    if (!hasTransit) {
+      showRealRouteDetails('transit_unavailable');
+      return;
+    }
+  }
+  drawRealRoute(mode);
+  showRealRouteDetails(mode);
+}
+
+function drawRealRoute(mode) {
+  if (!map || !allRoutesData.legs) return;
+  if (routePolyline) { routePolyline.setMap(null); routePolyline = null; }
+  distanceLabelsArr.forEach(l => l.setMap && l.setMap(null));
+  distanceLabelsArr = [];
+
+  const legs = allRoutesData.legs;
+  const modeColors = { driving: '#667eea', walking: '#52c41a', transit: '#f5a623' };
+  const color = modeColors[mode] || '#667eea';
+
+  if (mode === 'transit') {
+    legs.forEach(leg => {
+      if (!leg.transit) return;
+      const segments = leg.transit.steps || [];
+      segments.forEach(seg => {
+        const transitMode = seg.transit_mode || 'walking';
+        let segColor, dashStyle, weight;
+        if (transitMode === 'walking') {
+          segColor = '#999'; dashStyle = [4, 4]; weight = 3;
+        } else if (transitMode === 'bus') {
+          segColor = '#4caf50'; dashStyle = []; weight = 4;
+        } else if (transitMode === 'subway') {
+          segColor = '#2196f3'; dashStyle = []; weight = 4;
+        } else if (transitMode === 'train') {
+          segColor = '#ff9800'; dashStyle = []; weight = 4;
+        } else {
+          segColor = '#667eea'; dashStyle = []; weight = 4;
+        }
+        const path = [];
+        if (seg.path) seg.path.forEach(p => path.push([p.lng, p.lat]));
+        if (path.length > 1) {
+          const pl = new AMap.Polyline({
+            path, strokeColor: segColor, strokeWeight: weight,
+            strokeOpacity: 0.85, lineJoin: 'round', showDir: true,
+            strokeStyle: dashStyle.length ? 'dashed' : 'solid',
+            strokeDasharray: dashStyle.length ? dashStyle : undefined
+          });
+          pl.setMap(map);
+          distanceLabelsArr.push(pl);
+        }
+      });
+    });
+  } else {
+    const fullPath = [];
+    legs.forEach((leg, i) => {
+      const route = leg[mode];
+      if (route) {
+        const path = extractPolylinePath(route);
+        if (path.length > 0) fullPath.push(...path);
+      } else {
+        const pts = allRoutesData.orderedPoints;
+        fullPath.push([pts[i].lng, pts[i].lat], [pts[i + 1].lng, pts[i + 1].lat]);
+      }
+    });
+
+    if (fullPath.length > 1) {
+      routePolyline = new AMap.Polyline({
+        path: fullPath, strokeColor: color, strokeWeight: 5,
+        strokeOpacity: 0.8, lineJoin: 'round', showDir: true
+      });
+      routePolyline.setMap(map);
+    }
+
+    if (showDistanceLabels) {
+      legs.forEach((leg, i) => {
+        const route = leg[mode];
+        if (!route) return;
+        const dist = route.distance ? route.distance / 1000 : 0;
+        const time = route.time ? Math.ceil(route.time / 60) : 0;
+        const pts = allRoutesData.orderedPoints;
+        const midLng = (pts[i].lng + pts[i + 1].lng) / 2;
+        const midLat = (pts[i].lat + pts[i + 1].lat) / 2;
+        const label = new AMap.Marker({
+          position: [midLng, midLat],
+          content: `<div class="distance-label">${dist < 1 ? (dist * 1000).toFixed(0) + 'm' : dist.toFixed(1) + 'km'} · ${time < 60 ? time + '分钟' : (time / 60).toFixed(1) + '小时'}</div>`,
+          offset: new AMap.Pixel(-40, -10)
+        });
+        label.setMap(map);
+        distanceLabelsArr.push(label);
+      });
+    }
+  }
+}
+
+function formatDuration(seconds) {
+  if (seconds < 60) return Math.ceil(seconds / 60) + '分钟';
+  const mins = Math.ceil(seconds / 60);
+  if (mins < 60) return mins + '分钟';
+  return Math.floor(mins / 60) + '小时' + (mins % 60 > 0 ? mins % 60 + '分钟' : '');
+}
+
+function showRealRouteDetails(mode) {
   const panel = document.getElementById('routePanel');
   const content = document.getElementById('routeContent');
   panel.style.display = 'block';
 
+  if (mode === 'transit_unavailable') {
+    content.innerHTML = '<div class="route-loading" style="text-align:center;padding:20px;">🚌 公交路线暂不可用<br><span style="font-size:11px;color:#999;margin-top:8px;display:block;">公交规划需要额外的高德 Web Service API 密钥<br>驾车和步行路线可正常使用</span></div>';
+    return;
+  }
+
+  const legs = allRoutesData.legs;
+  const orderedPoints = allRoutesData.orderedPoints;
   let html = '';
   let currentTime = 8 * 60;
   let totalDist = 0;
@@ -520,13 +771,33 @@ function showRouteDetails(orderedPoints) {
 
   orderedPoints.forEach((p, i) => {
     if (i > 0) {
-      const prev = orderedPoints[i - 1];
-      const dist = haversineDistance(prev.lng, prev.lat, p.lng, p.lat);
-      const travel = estimateTravelTime(dist);
-      totalDist += dist;
-      totalTravel += travel;
-      currentTime += travel;
-      html += `<div class="route-step"><div class="step-num" style="background:#999;font-size:9px;">🚗</div><div class="step-info"><div class="step-detail">行驶 ${dist < 1 ? (dist * 1000).toFixed(0) + 'm' : dist.toFixed(1) + 'km'}，约 ${travel < 60 ? travel.toFixed(0) + '分钟' : (travel / 60).toFixed(1) + '小时'}</div></div></div>`;
+      const leg = legs[i - 1];
+      const route = leg[mode];
+
+      if (mode === 'transit' && leg.transit) {
+        const transit = leg.transit;
+        const dist = transit.distance ? transit.distance / 1000 : 0;
+        const time = transit.time ? Math.ceil(transit.time / 60) : 0;
+        totalDist += dist;
+        totalTravel += time;
+        currentTime += time;
+        html += `<div class="route-step"><div class="step-num" style="background:#f5a623;font-size:10px;">🚌</div><div class="step-info"><div class="step-detail">公交 ${dist < 1 ? (dist * 1000).toFixed(0) + 'm' : dist.toFixed(1) + 'km'}，约 ${formatDuration(transit.time || 0)}</div>`;
+        html += showTransitLegDetails(transit);
+        html += `</div></div>`;
+      } else if (route) {
+        const dist = route.distance ? route.distance / 1000 : 0;
+        const time = route.time ? Math.ceil(route.time / 60) : 0;
+        totalDist += dist;
+        totalTravel += time;
+        currentTime += time;
+        const icons = { driving: '🚗', walking: '🚶' };
+        const labels = { driving: '驾车', walking: '步行' };
+        html += `<div class="route-step"><div class="step-num" style="background:#999;font-size:10px;">${icons[mode] || '🚗'}</div><div class="step-info"><div class="step-detail">${labels[mode] || '行驶'} ${dist < 1 ? (dist * 1000).toFixed(0) + 'm' : dist.toFixed(1) + 'km'}，约 ${formatDuration(route.time || 0)}</div></div></div>`;
+      } else {
+        const dist = haversineDistance(orderedPoints[i - 1].lng, orderedPoints[i - 1].lat, p.lng, p.lat);
+        totalDist += dist;
+        html += `<div class="route-step"><div class="step-num" style="background:#ccc;font-size:9px;">⚠</div><div class="step-info"><div class="step-detail" style="color:#e74c3c;">${mode === 'transit' ? '公交' : '该方式'}路线不可达，直线距离 ${dist.toFixed(1)}km</div></div></div>`;
+      }
     }
 
     const hours = parseHours(p.hours);
@@ -553,11 +824,72 @@ function showRouteDetails(orderedPoints) {
 
   const endH = Math.floor(currentTime / 60);
   const endM = Math.floor(currentTime % 60);
+  const modeNames = { driving: '驾车', walking: '步行', transit: '公交' };
   html += `<div class="route-summary">
-    📊 <strong>总览</strong>：${orderedPoints.length}个景点 · 总路程 ${totalDist.toFixed(1)}km · 交通 ${totalTravel.toFixed(0)}分钟 · 预计结束 ${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}
+    📊 <strong>${modeNames[mode] || ''}总览</strong>：${orderedPoints.length}个景点 · 总路程 ${totalDist.toFixed(1)}km · 交通 ${totalTravel}分钟 · 预计结束 ${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}
   </div>`;
 
   content.innerHTML = html;
+}
+
+function showTransitLegDetails(transit) {
+  let html = '';
+  const segments = transit.steps || [];
+  segments.forEach(seg => {
+    const mode = seg.transit_mode || 'walking';
+    if (mode === 'walking') {
+      const walkDist = seg.distance || 0;
+      const walkTime = seg.duration ? Math.ceil(seg.duration) : (seg.time ? Math.ceil(seg.time / 60) : 0);
+      html += `<div class="transit-segment walking"><div class="seg-icon">🚶</div>步行 ${walkDist}m${walkTime > 0 ? '（' + walkTime + '分钟）' : ''}${seg.instruction ? ' · ' + seg.instruction : ''}</div>`;
+    } else if (mode === 'bus') {
+      if (seg.line_name) {
+        html += `<div class="transit-segment bus"><div class="seg-icon">🚌</div><span class="transit-line-badge">${seg.line_name}</span>`;
+        if (seg.departure_stop) html += ` ${seg.departure_stop}上车`;
+        if (seg.arrival_stop) html += ` → ${seg.arrival_stop}下车`;
+        html += `</div>`;
+      } else {
+        const bus = seg.bus;
+        if (bus && bus.bus_lines && bus.bus_lines.length > 0) {
+          const line = bus.bus_lines[0];
+          const lineName = line.name || '公交车';
+          const stops = (bus.via_stops || []).length;
+          const boardStop = bus.on_station ? bus.on_station.name : '';
+          const alightStop = bus.off_station ? bus.off_station.name : '';
+          html += `<div class="transit-segment bus"><div class="seg-icon">🚌</div><span class="transit-line-badge">${lineName}</span>`;
+          if (boardStop) html += ` ${boardStop}上车`;
+          if (alightStop) html += ` → ${alightStop}下车`;
+          if (stops > 0) html += `（${stops}站）`;
+          html += `</div>`;
+        }
+      }
+    } else if (mode === 'subway') {
+      if (seg.line_name) {
+        html += `<div class="transit-segment metro"><div class="seg-icon">🚇</div><span class="transit-line-badge">${seg.line_name}</span>`;
+        if (seg.departure_stop) html += ` ${seg.departure_stop}上车`;
+        if (seg.arrival_stop) html += ` → ${seg.arrival_stop}下车`;
+        html += `</div>`;
+      } else {
+        const railway = seg.railway;
+        if (railway && railway.lines && railway.lines.length > 0) {
+          const line = railway.lines[0];
+          const lineName = line.name || '地铁';
+          const boardStop = railway.on_station ? railway.on_station.name : '';
+          const alightStop = railway.off_station ? railway.off_station.name : '';
+          html += `<div class="transit-segment metro"><div class="seg-icon">🚇</div><span class="transit-line-badge">${lineName}</span>`;
+          if (boardStop) html += ` ${boardStop}上车`;
+          if (alightStop) html += ` → ${alightStop}下车`;
+          html += `</div>`;
+        }
+      }
+    } else if (mode === 'train') {
+      const railway = seg.railway;
+      if (railway) {
+        const lineName = (railway.lines && railway.lines[0]) ? railway.lines[0].name : '火车';
+        html += `<div class="transit-segment metro"><div class="seg-icon">🚆</div><span class="transit-line-badge">${lineName}</span></div>`;
+      }
+    }
+  });
+  return html;
 }
 
 // ========== 显示控制 ==========
@@ -566,10 +898,9 @@ function toggleReviews() {
   document.getElementById('btnToggleReviews').textContent = showReviews ? '隐藏点评' : '显示点评';
   document.getElementById('btnToggleReviews').classList.toggle('active', !showReviews);
   updateMapMarkers();
-  const points = getSelectedPoints();
-  if (document.getElementById('routePanel').style.display !== 'none' && points.length >= 2) {
-    const ordered = optimizeRoute(points);
-    drawRoute(ordered);
+  if (allRoutesData.legs && currentOrderedPoints.length > 0) {
+    drawRouteMarkers(currentOrderedPoints);
+    drawRealRoute(currentTravelMode);
   }
 }
 
@@ -577,10 +908,8 @@ function toggleDistance() {
   showDistanceLabels = !showDistanceLabels;
   document.getElementById('btnToggleDistance').textContent = showDistanceLabels ? '隐藏距离' : '显示距离';
   document.getElementById('btnToggleDistance').classList.toggle('active', !showDistanceLabels);
-  const points = getSelectedPoints();
-  if (document.getElementById('routePanel').style.display !== 'none' && points.length >= 2) {
-    const ordered = optimizeRoute(points);
-    drawRoute(ordered);
+  if (allRoutesData.legs && currentOrderedPoints.length > 0) {
+    drawRealRoute(currentTravelMode);
   }
 }
 
