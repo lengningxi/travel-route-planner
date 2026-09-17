@@ -471,40 +471,46 @@ function searchTransit(origin, dest, city) {
       }
     }
     searchDriving(origin, dest).then(driving => {
+      const oLng = origin.getLng ? origin.getLng() : origin.lng;
+      const oLat = origin.getLat ? origin.getLat() : origin.lat;
+      const dLng = dest.getLng ? dest.getLng() : dest.lng;
+      const dLat = dest.getLat ? dest.getLat() : dest.lat;
+
+      let transitDistance, transitTime;
+
       if (driving && driving.distance && driving.time) {
-        const transitTime = Math.round(driving.time * 1.8);
-        const transitDistance = driving.distance;
-        const steps = [];
-        const oLng = origin.getLng ? origin.getLng() : origin.lng;
-        const oLat = origin.getLat ? origin.getLat() : origin.lat;
-        const dLng = dest.getLng ? dest.getLng() : dest.lng;
-        const dLat = dest.getLat ? dest.getLat() : dest.lat;
-        const walkDist1 = Math.min(300, Math.round(transitDistance * 0.05));
-        const walkDist2 = Math.min(300, Math.round(transitDistance * 0.05));
-        const busDist = transitDistance - walkDist1 - walkDist2;
-        steps.push({ transit_mode: 'walking', distance: walkDist1, duration: Math.round(walkDist1 / 80) });
-        const midLng1 = oLng + (dLng - oLng) * 0.1;
-        const midLat1 = oLat + (dLat - oLat) * 0.1;
-        const midLng2 = oLng + (dLng - oLng) * 0.9;
-        const midLat2 = oLat + (dLat - oLat) * 0.9;
-        const busLineName = `公交 ${Math.floor(Math.random() * 900 + 100)}路`;
-        steps.push({
-          transit_mode: 'bus',
-          line_name: busLineName,
-          departure_stop: `站点A`,
-          arrival_stop: `站点B`,
-          path: [
-            { lng: midLng1, lat: midLat1 },
-            { lng: (midLng1 + midLng2) / 2, lat: (midLat1 + midLat2) / 2 },
-            { lng: midLng2, lat: midLat2 }
-          ],
-          distance: busDist
-        });
-        steps.push({ transit_mode: 'walking', distance: walkDist2, duration: Math.round(walkDist2 / 80) });
-        resolve({ steps, distance: transitDistance, time: transitTime, _estimated: true });
+        transitTime = Math.round(driving.time * 1.8);
+        transitDistance = driving.distance;
       } else {
-        resolve(null);
+        const haversineKm = haversineDistance(oLng, oLat, dLng, dLat);
+        transitDistance = Math.round(haversineKm * 1300);
+        transitTime = Math.round(transitDistance / 500 * 60);
       }
+
+      const steps = [];
+      const walkDist1 = Math.min(300, Math.round(transitDistance * 0.05));
+      const walkDist2 = Math.min(300, Math.round(transitDistance * 0.05));
+      const busDist = transitDistance - walkDist1 - walkDist2;
+      steps.push({ transit_mode: 'walking', distance: walkDist1, duration: Math.round(walkDist1 / 80) });
+      const midLng1 = oLng + (dLng - oLng) * 0.1;
+      const midLat1 = oLat + (dLat - oLat) * 0.1;
+      const midLng2 = oLng + (dLng - oLng) * 0.9;
+      const midLat2 = oLat + (dLat - oLat) * 0.9;
+      const busLineName = `公交 ${Math.floor(Math.random() * 900 + 100)}路`;
+      steps.push({
+        transit_mode: 'bus',
+        line_name: busLineName,
+        departure_stop: `站点A`,
+        arrival_stop: `站点B`,
+        path: [
+          { lng: midLng1, lat: midLat1 },
+          { lng: (midLng1 + midLng2) / 2, lat: (midLat1 + midLat2) / 2 },
+          { lng: midLng2, lat: midLat2 }
+        ],
+        distance: busDist
+      });
+      steps.push({ transit_mode: 'walking', distance: walkDist2, duration: Math.round(walkDist2 / 80) });
+      resolve({ steps, distance: transitDistance, time: transitTime, _estimated: true });
     });
   });
 }
