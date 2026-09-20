@@ -53,8 +53,20 @@
       </scroll-view>
     </view>
 
-    <view class="route-info" wx:if="{{routeInfo}}">
-      <text>{{routeInfo}}</text>
+    <view class="route-panel" wx:if="{{showRoutePanel}}">
+      <view class="mode-tabs">
+        <view class="mode-tab {{currentTravelMode === 'driving' ? 'active' : ''}}" bindtap="switchMode" data-mode="driving">🚗 驾车</view>
+        <view class="mode-tab {{currentTravelMode === 'walking' ? 'active' : ''}}" bindtap="switchMode" data-mode="walking">🚶 步行</view>
+        <view class="mode-tab {{currentTravelMode === 'transit' ? 'active' : ''}}" bindtap="switchMode" data-mode="transit">🚌 公交</view>
+      </view>
+      <view class="route-info">
+        <text>{{routeInfo}}</text>
+      </view>
+      <view class="route-details" wx:if="{{routeDetails.length > 0}}">
+        <view class="route-detail-item" wx:for="{{routeDetails}}" wx:key="*this">
+          <text>{{item}}</text>
+        </view>
+      </view>
     </view>
   </view>
 

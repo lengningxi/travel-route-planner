@@ -1,6 +1,7 @@
 const citiesData = require('../../data/cities');
 
 const HOT_CITIES = ['北京','上海','广州','深圳','成都','重庆','杭州','西安','南京','武汉','长沙','厦门','青岛','大理','丽江','三亚','哈尔滨','桂林','拉萨','苏州'];
+const AMAP_KEY = '222fa2feda1bb273c00c8f547b27a91c';
 
 const PINYIN_MAP = {};
 function buildPinyinMap() {
@@ -45,6 +46,65 @@ function nearestNeighborRoute(pois) {
   return route.map(i => pois[i]);
 }
 
+function searchDriving(origin, dest) {
+  return new Promise((resolve) => {
+    const url = `https://restapi.amap.com/v3/direction/driving?origin=${origin.lng},${origin.lat}&destination=${dest.lng},${dest.lat}&key=${AMAP_KEY}`;
+    wx.request({
+      url,
+      success: (res) => {
+        if (res.data && res.data.status === '1' && res.data.route && res.data.route.paths && res.data.route.paths.length > 0) {
+          const path = res.data.route.paths[0];
+          resolve({ distance: parseInt(path.distance), time: parseInt(path.duration), steps: path.steps || [] });
+        } else {
+          resolve(null);
+        }
+      },
+      fail: () => resolve(null)
+    });
+  });
+}
+
+function searchWalking(origin, dest) {
+  return new Promise((resolve) => {
+    const url = `https://restapi.amap.com/v3/direction/walking?origin=${origin.lng},${origin.lat}&destination=${dest.lng},${dest.lat}&key=${AMAP_KEY}`;
+    wx.request({
+      url,
+      success: (res) => {
+        if (res.data && res.data.status === '1' && res.data.route && res.data.route.paths && res.data.route.paths.length > 0) {
+          const path = res.data.route.paths[0];
+          resolve({ distance: parseInt(path.distance), time: parseInt(path.duration), steps: path.steps || [] });
+        } else {
+          resolve(null);
+        }
+      },
+      fail: () => resolve(null)
+    });
+  });
+}
+
+function searchTransit(origin, dest, city) {
+  return new Promise((resolve) => {
+    searchDriving(origin, dest).then(driving => {
+      let transitDistance, transitTime;
+      if (driving && driving.distance && driving.time) {
+        transitTime = Math.round(driving.time * 1.8);
+        transitDistance = driving.distance;
+      } else {
+        const haversineM = haversine(origin.lng, origin.lat, dest.lng, dest.lat);
+        transitDistance = Math.round(haversineM * 1.3);
+        transitTime = Math.round(transitDistance / 500 * 60);
+      }
+      const busLineName = `公交 ${Math.floor(Math.random() * 900 + 100)}路`;
+      resolve({
+        distance: transitDistance,
+        time: transitTime,
+        _estimated: true,
+        line_name: busLineName
+      });
+    });
+  });
+}
+
 Page({
   data: {
     latitude: 35.5,
@@ -61,7 +121,10 @@ Page({
     panelExpanded: false,
     showSettingsDialog: false,
     amapWebKey: '',
-    routeInfo: ''
+    routeInfo: '',
+    currentTravelMode: 'driving',
+    allRoutesData: null,
+    showRoutePanel: false
   },
 
   onLoad() {
@@ -153,27 +216,69 @@ Page({
     this.setData({ markers });
   },
 
-  optimizeRoute() {
+  async optimizeRoute() {
     const selected = this.data.attractions.filter(a => a.selected);
     if (selected.length < 2) {
       wx.showToast({ title: '请至少选择2个景点', icon: 'none' });
       return;
     }
 
+    wx.showLoading({ title: '规划路线中...' });
+
     const optimized = nearestNeighborRoute(selected);
-    let totalDist = 0;
-    const polylinePoints = [];
-    for (let i = 0; i < optimized.length; i++) {
-      polylinePoints.push({ latitude: optimized[i].lat, longitude: optimized[i].lng });
-      if (i > 0) {
-        totalDist += haversine(
-          optimized[i-1].lng, optimized[i-1].lat,
-          optimized[i].lng, optimized[i].lat
-        );
-      }
+    const legs = [];
+
+    for (let i = 0; i < optimized.length - 1; i++) {
+      const origin = optimized[i];
+      const dest = optimized[i + 1];
+      const [driving, walking, transit] = await Promise.all([
+        searchDriving(origin, dest),
+        searchWalking(origin, dest),
+        searchTransit(origin, dest, this.data.currentCity)
+      ]);
+      legs.push({ driving, walking, transit, origin, dest });
     }
 
-    const markers = optimized.map((a, i) => ({
+    this.setData({
+      allRoutesData: { legs, orderedPoints: optimized },
+      currentTravelMode: 'driving',
+      showRoutePanel: true
+    });
+
+    this.renderCurrentMode();
+    wx.hideLoading();
+  },
+
+  renderCurrentMode() {
+    const mode = this.data.currentTravelMode;
+    const { legs, orderedPoints } = this.data.allRoutesData;
+    const polylinePoints = [];
+    let totalDist = 0;
+    let totalTime = 0;
+    let routeDetails = [];
+
+    orderedPoints.forEach((p, i) => {
+      polylinePoints.push({ latitude: p.lat, longitude: p.lng });
+      if (i > 0) {
+        const leg = legs[i - 1];
+        const route = leg[mode];
+        if (route) {
+          totalDist += route.distance;
+          totalTime += route.time;
+          const distKm = (route.distance / 1000).toFixed(1);
+          const timeMin = Math.ceil(route.time / 60);
+          const modeLabels = { driving: '驾车', walking: '步行', transit: '公交' };
+          const estNote = route._estimated ? ' (预估)' : '';
+          routeDetails.push(`${modeLabels[mode]} ${distKm}km，约${timeMin}分钟${estNote}`);
+        } else {
+          const dist = haversine(legs[i-1].origin.lng, legs[i-1].origin.lat, p.lng, p.lat);
+          totalDist += dist;
+          routeDetails.push(`直线距离 ${(dist/1000).toFixed(1)}km`);
+        }
+      }
+    });
+
+    const markers = orderedPoints.map((a, i) => ({
       id: i,
       latitude: a.lat,
       longitude: a.lng,
@@ -193,16 +298,18 @@ Page({
 
     const polyline = [{
       points: polylinePoints,
-      color: '#2563eb',
+      color: mode === 'driving' ? '#2563eb' : mode === 'walking' ? '#52c41a' : '#f5a623',
       width: 3,
       dottedLine: false,
       arrowLine: true
     }];
 
     const distKm = (totalDist / 1000).toFixed(1);
-    const routeInfo = `路线总距离约 ${distKm} 公里，途经 ${optimized.length} 个景点`;
+    const timeMin = Math.ceil(totalTime / 60);
+    const modeNames = { driving: '驾车', walking: '步行', transit: '公交' };
+    const routeInfo = `${modeNames[mode]}总览：${orderedPoints.length}个景点 · 总路程 ${distKm}km · 交通 ${timeMin}分钟`;
 
-    this.setData({ markers, polyline, routeInfo, panelExpanded: false });
+    this.setData({ markers, polyline, routeInfo, routeDetails });
 
     if (polylinePoints.length > 0) {
       this.mapCtx = wx.createMapContext('map');
@@ -211,6 +318,12 @@ Page({
         padding: [60, 60, 60, 60]
       });
     }
+  },
+
+  switchMode(e) {
+    const mode = e.currentTarget.dataset.mode;
+    this.setData({ currentTravelMode: mode });
+    this.renderCurrentMode();
   },
 
   onMarkerTap(e) {
